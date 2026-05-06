@@ -1,5 +1,4 @@
 import { Button } from "@cap/ui-solid";
-import { useNavigate } from "@solidjs/router";
 import {
 	createMutation,
 	queryOptions,
@@ -15,7 +14,6 @@ import {
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as shell from "@tauri-apps/plugin-shell";
-import * as updater from "@tauri-apps/plugin-updater";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -1548,49 +1546,6 @@ export default function () {
 	);
 }
 
-let hasChecked = false;
-function createUpdateCheck() {
-	if (import.meta.env.DEV) return;
-
-	const navigate = useNavigate();
-
-	onMount(async () => {
-		if (hasChecked) return;
-		hasChecked = true;
-
-		await new Promise((res) => setTimeout(res, 10_000));
-
-		let update: updater.Update | undefined;
-		try {
-			const result = await updater.check();
-			if (result) update = result;
-		} catch (e) {
-			console.error("Failed to check for updates:", e);
-			await dialog.message(
-				"Unable to check for updates. Please download the latest version manually from cap.so/download. Your data will not be lost.\n\nIf this issue persists, please contact support.",
-				{ title: "Update Error", kind: "error" },
-			);
-			return;
-		}
-
-		if (!update) return;
-
-		let shouldUpdate: boolean | undefined;
-		try {
-			shouldUpdate = await dialog.confirm(
-				`Version ${update.version} of Cap is available, would you like to install it?`,
-				{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" },
-			);
-		} catch (e) {
-			console.error("Failed to show update dialog:", e);
-			return;
-		}
-
-		if (!shouldUpdate) return;
-		navigate("/update");
-	});
-}
-
 function MainWindowHelpButton() {
 	return (
 		<Tooltip content={<span>Help & Tour</span>}>
@@ -2057,8 +2012,6 @@ function Page() {
 	}));
 
 	const setCamera = createCameraMutation();
-
-	createUpdateCheck();
 
 	onMount(async () => {
 		if (document.activeElement instanceof HTMLElement) {
