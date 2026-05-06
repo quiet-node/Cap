@@ -191,9 +191,9 @@ UploadProgress { progress: 0.0, message: "Starting upload...".to_string() }
 
 Frontend (listen; generated bindings):
 ```ts
-import { events } from "./tauri"; // auto-generated
+import { events } from "./tauri";
 await events.uploadProgress.listen((event) => {
-  // update UI with event.payload
+  setProgress(event.payload.progress);
 });
 ```
 
@@ -219,27 +219,22 @@ export async function updateVideo(data: FormData) {
   const user = await getCurrentUser();
   if (!user?.id) throw new Error("Unauthorized");
 
-  // Database operations with Drizzle
   return await db().update(videos).set({ ... }).where(eq(videos.id, id));
 }
 ```
 
 #### Desktop IPC Commands
 ```rust
-// Rust side - emit events
 UploadProgress { progress: 0.5, message: "Uploading...".to_string() }
   .emit(&app)
   .ok();
 ```
 
 ```typescript
-// Frontend side - listen to events (auto-generated)
 import { events, commands } from "./tauri";
 
-// Call commands
 await commands.startRecording({ ... });
 
-// Listen to events
 await events.uploadProgress.listen((event) => {
   setProgress(event.payload.progress);
 });
@@ -247,14 +242,12 @@ await events.uploadProgress.listen((event) => {
 
 #### React Query Patterns
 ```typescript
-// Queries with Server Actions
 const { data, isLoading } = useQuery({
   queryKey: ["videos", userId],
   queryFn: () => getUserVideos(),
   staleTime: 5 * 60 * 1000,
 });
 
-// Mutations with cache updates
 const updateMutation = useMutation({
   mutationFn: updateVideo,
   onSuccess: (updated) => {
@@ -262,6 +255,84 @@ const updateMutation = useMutation({
   },
 });
 ```
+
+## Build From Source
+
+### Toolchain prereqs
+- Node 20+, pnpm 10.5.2 (locked via `packageManager`), Rust 1.88+, Docker (OrbStack recommended).
+- macOS: `cmake` (Homebrew). Windows: `llvm`, `clang`, `vcpkg`.
+- `pnpm cap-setup` installs FFmpeg + native media deps. Does NOT install cmake/llvm/clang/vcpkg, install those manually first.
+
+### First-time setup
+```bash
+pnpm install
+pnpm cap-setup       # FFmpeg + native libs
+pnpm env-setup       # interactive .env generator (asks: which apps, MinIO/MySQL via Docker, overrides)
+```
+
+### Run dev
+- `pnpm dev` — full stack: spins up Docker (MySQL + MinIO), runs `turbo dev` for web + desktop. Auto `docker:stop` on exit.
+- `pnpm dev:web` — same as `pnpm dev` minus desktop filter.
+- `pnpm dev:desktop` — `apps/desktop` Tauri+SolidStart only, no Docker.
+- `pnpm dev:windows` — Windows variant of `pnpm dev`.
+- `cd apps/web && pnpm dev` — pure Next.js, no Docker, no Turbo.
+
+### Build artifacts
+- `pnpm build` — Turbo build entire workspace.
+- `pnpm build:web` — web only.
+- `pnpm build:web:docker` — web Docker image (`NEXT_PUBLIC_DOCKER_BUILD=true` standalone output).
+- `pnpm tauri:build` — desktop release. Wraps `pnpm --dir apps/desktop tauri build --verbose`. Outputs platform installer under `apps/desktop/src-tauri/target/release/bundle/`.
+- `cargo build -p <crate>` — single Rust crate.
+
+### Self-host production
+```bash
+docker compose up -d              # localhost:3000
+docker compose logs cap-web       # login links when email unconfigured
+```
+Override for production: `CAP_URL`, `S3_PUBLIC_URL`. Coolify variant: `docker-compose.coolify.yml`.
+
+### Tests (concrete commands)
+- `pnpm test` — Turbo run all package tests.
+- `pnpm test:web` — `@cap/web` Vitest.
+- `pnpm test:desktop:memory` / `:unit` — desktop memory-leak suites.
+- `cargo test -p <crate>` — Rust per-crate.
+- `cap-test` harness (matrix runner, Rust):
+  - `pnpm test:matrix:quick` / `pnpm test:matrix` / `pnpm test:matrix:exhaustive`
+  - `pnpm test:suite:recording|encoding|playback|sync`
+  - `pnpm test:synthetic`, `pnpm test:benchmark`, `pnpm test:discover`
+
+### macOS recording-permission gotcha
+When running `pnpm dev:desktop` from a terminal, macOS attaches screen/mic permissions to the **terminal app** (Terminal.app, iTerm, etc.), NOT to `Cap - Development.app`. Grant perms to whichever terminal launches the dev build.
+
+Recording output paths:
+- macOS: `~/Library/Application Support/so.cap.desktop.dev/recordings`
+- Windows: `%programfiles%/so.cap.desktop.dev/recordings`
+
+## Rust Crate Map (high-level)
+
+`crates/*` split by responsibility. When tracing capture → encode → upload, follow this layering:
+
+| Crate prefix | Role |
+|---|---|
+| `scap-*` | Platform screen capture (macOS ScreenCaptureKit, Windows WGC). MIT-licensed. |
+| `cap-camera*` | Cross-platform camera capture (AVFoundation / MediaFoundation). MIT-licensed. |
+| `cap-media*` | Frame pipeline primitives, format conversion, codec wrappers. |
+| `cap-recording` | Recording orchestration: starts capture sources, muxes, writes segments to disk. |
+| `cap-rendering` | Studio-mode editor: backgrounds, zooms, captions, effect compositor. |
+| `cap-export` | Final export pipeline: render → encode → mux to deliverable file. |
+| `cap-test` | Matrix/suite/synthetic/benchmark harness invoked by `pnpm test:*` scripts above. |
+| `apps/cli` | Headless CLI binary. |
+| `apps/media-server` | Standalone media-processing service consumed by web app. |
+
+Web Effect packages decompose by layer (refer when working on RPC):
+
+| Package | Role |
+|---|---|
+| `packages/web-domain` | Domain models, Effect schemas, error types, RPC procedure contracts. Shared between web + desktop. |
+| `packages/web-backend` | Service implementations (Videos, S3Buckets, etc.) backing the contracts. |
+| `packages/web-rpc` | RPC transport plumbing between client/server. |
+| `packages/web-api-contract-effect` | HTTP contract schemas powering desktop calls. |
+| `packages/sdk-recorder`, `packages/sdk-embed` | External SDKs (recorder + embed iframe). |
 
 ## Environment Variables
 
@@ -345,7 +416,7 @@ function Example() {
     gcTime: 10 * 60 * 1000,
   });
   if (isLoading) return <Skeleton />;
-  if (error) return <ErrorState onRetry={() => { /* refetch */ }} />;
+  if (error) return <ErrorState onRetry={refetch} />;
   return <List items={data} />;
 }
 ```
@@ -354,14 +425,14 @@ Server Action mutation with targeted cache updates:
 ```tsx
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { updateItem } from "@/actions/items"; // 'use server'
+import { updateItem } from "@/actions/items";
 
 function useUpdateItem() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: updateItem,
     onSuccess: (updated) => {
-      qc.setQueriesData({ queryKey: ["items"] }, (old: any[] | undefined) =>
+      qc.setQueriesData<Item[]>({ queryKey: ["items"] }, (old) =>
         old?.map((it) => (it.id === updated.id ? { ...it, ...updated } : it))
       );
       qc.setQueryData(["item", updated.id], updated);
@@ -414,10 +485,6 @@ Minimize `useEffect` usage: compute during render, handle logic in event handler
 
 The comments policy, the denied clippy patterns, and the Biome style invariants all live in **Pre-Generation Invariants** at the top of this file — that section is authoritative.
 
-## Rust Clippy Rules (Workspace Lints)
-
-See the **Pre-Generation Invariants** section at the top of this file — it is the single source of truth for the denied workspace lints (`[workspace.lints]` in `Cargo.toml`) and the clippy-clean forms to emit. Keeping only one copy avoids the two lists drifting apart.
-
 ## Security & Privacy Considerations
 
 ### Data Handling
@@ -467,10 +534,6 @@ Transcription/AI Enhancement → Database Storage
 - **Effect System**: Used in web-backend packages
 - **Media Processing**: FFmpeg documentation for Rust bindings
 
-## Code Formatting & Lint Gates
+## Lint Gates
 
-Before declaring any task complete, run the appropriate gate for every file type that was touched. These are the same gates CI runs; skipping them will push broken work.
-
-- **Rust**: `cargo fmt --all` **and** `cargo clippy -p <crate> --all-targets -- -D warnings` (`--workspace` for multi-crate changes). `cargo check` does NOT run the denied clippy lints and is not a substitute.
-- **TypeScript / JavaScript / JSON / CSS / MD**: `pnpm format` **and** `pnpm lint`. If types changed, also `pnpm typecheck`.
-- If a gate fails, fix the violation in the source code (see the "write X instead of Y" tables in **Pre-Generation Invariants** at the top of this file). Do not paper over clippy/Biome failures with `#[allow(...)]`, `// biome-ignore`, or `any` unless explicitly approved.
+See **Pre-Generation Invariants > Post-edit gates** at top. Same source of truth for both pre-edit prevention and post-edit verification.
