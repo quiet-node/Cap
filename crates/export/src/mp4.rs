@@ -180,15 +180,14 @@ impl Mp4ExportSettings {
 
         let audio_segments = get_audio_segments(&base.segments);
 
-        let has_audio = audio_segments
-            .first()
-            .filter(|_| !base.project_config.audio.mute)
-            .is_some();
+        let has_audio = !base.project_config.audio.mute
+            && (!audio_segments.is_empty() || base.project_config.audio.music_path.is_some());
 
         let record_first_queued_ms = mode.record_first_queued_ms_since_pipeline;
         let nv12_render_startup_breakdown_ms = mode.nv12_render_startup_breakdown_ms;
 
         let project_for_audio = base.project_config.clone();
+        let project_path_for_audio = base.project_path.clone();
         let pipeline_start_for_encoder = pipeline_start;
         let encoder_thread = tokio::task::spawn_blocking(move || {
             trace!("Creating MP4File encoder (NV12 path)");
@@ -223,7 +222,9 @@ impl Mp4ExportSettings {
             info!("Created MP4File encoder (NV12, external conversion, export settings)");
 
             let mut audio_renderer = if has_audio {
-                Some(AudioRenderer::new(audio_segments))
+                let music =
+                    cap_editor::load_music_track(&project_path_for_audio, &project_for_audio);
+                Some(AudioRenderer::new(audio_segments, music))
             } else {
                 None
             };

@@ -347,6 +347,17 @@ impl EditorInstance {
     }
 
     pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
+        let music = {
+            let config = self.project_config.0.borrow().clone();
+            let project_path = self.project_path.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::segments::load_music_track(&project_path, &config)
+            })
+            .await
+            .ok()
+            .flatten()
+        };
+
         let (mut handle, prev) = {
             let mut state = self.state.lock().await;
 
@@ -358,6 +369,7 @@ impl EditorInstance {
                 render_constants: self.render_constants.clone(),
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
+                music,
                 telemetry: None,
             })
             .start(fps, resolution_base)

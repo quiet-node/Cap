@@ -3036,6 +3036,45 @@ async fn set_project_config(
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(editor_instance))]
+async fn set_background_music(
+    editor_instance: WindowEditorInstance,
+    path: Option<PathBuf>,
+) -> Result<Option<String>, String> {
+    let project_path = editor_instance.project_path.clone();
+
+    let previous = editor_instance
+        .project_config
+        .1
+        .borrow()
+        .audio
+        .music_path
+        .clone();
+    if let Some(previous) = previous {
+        let _ = std::fs::remove_file(project_path.join(previous));
+    }
+
+    let Some(source) = path else {
+        return Ok(None);
+    };
+
+    let decode_source = source.clone();
+    tokio::task::spawn_blocking(move || cap_audio::AudioData::from_file(&decode_source))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("Couldn't read that file as audio: {e}"))?;
+
+    let extension = source.extension().and_then(|e| e.to_str()).unwrap_or("mp3");
+    let file_name = format!("background-music.{extension}");
+
+    std::fs::copy(&source, project_path.join(&file_name))
+        .map_err(|e| format!("Failed to copy music file: {e}"))?;
+
+    Ok(Some(file_name))
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn update_project_config_in_memory(
     editor_instance: WindowEditorInstance,
     config: ProjectConfiguration,
@@ -4222,6 +4261,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             stop_playback,
             set_playhead_position,
             set_project_config,
+            set_background_music,
             update_project_config_in_memory,
             generate_zoom_segments_from_clicks,
             generate_keyboard_segments,

@@ -90,7 +90,47 @@ pub fn render_audio(
     samples
 }
 
-fn gain_for_db(db: f32) -> f32 {
+// Background music is anchored to the output timeline (not to clips), so it
+// mixes additively on top of an already-rendered buffer and wraps around the
+// source to loop for the full requested range.
+pub fn mix_looped_track(
+    data: &AudioData,
+    gain_db: f32,
+    start_frame: usize,
+    frames: usize,
+    out_offset: usize,
+    out: &mut [f32],
+) {
+    let channels = data.channels() as usize;
+    let total_frames = data.samples().len() / channels;
+    if total_frames == 0 {
+        return;
+    }
+
+    let gain = gain_for_db(gain_db);
+    if gain == f32::NEG_INFINITY {
+        return;
+    }
+
+    for i in 0..frames {
+        let src_frame = (start_frame + i) % total_frames;
+        let (l, r) = if channels == 1 {
+            let sample = data.samples()[src_frame] * 0.707;
+            (sample, sample)
+        } else {
+            (
+                data.samples()[src_frame * 2],
+                data.samples()[src_frame * 2 + 1],
+            )
+        };
+
+        let out_idx = out_offset + i * 2;
+        out[out_idx] = (out[out_idx] + l * gain).clamp(-1.0, 1.0);
+        out[out_idx + 1] = (out[out_idx + 1] + r * gain).clamp(-1.0, 1.0);
+    }
+}
+
+pub fn gain_for_db(db: f32) -> f32 {
     match db {
         // Fully mute when at minimum
         v if v <= -30.0 => f32::NEG_INFINITY,
@@ -161,5 +201,44 @@ mod tests {
         // Frames 4..10: short track exhausted -> contributes silence, long track remains.
         assert!((out[4 * 2] - 0.5).abs() < 1e-6);
         assert!((out[9 * 2] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn looped_track_wraps_around_source() {
+        // 4 stereo frames carrying L = R = 0.1, 0.2, 0.3, 0.4.
+        let mut samples = Vec::new();
+        for k in 0..4 {
+            let v = (k as f32 + 1.0) / 10.0;
+            samples.push(v);
+            samples.push(v);
+        }
+        let data = AudioData::from_raw_f32(samples, 2);
+
+        let mut out = vec![0.0; 10 * 2];
+        mix_looped_track(&data, 0.0, 2, 10, 0, &mut out);
+
+        // start_frame 2 -> source frames 2,3,0,1,2,3,0,1,2,3.
+        let expected = [0.3, 0.4, 0.1, 0.2, 0.3, 0.4, 0.1, 0.2, 0.3, 0.4];
+        for (frame, want) in expected.iter().enumerate() {
+            assert!(
+                (out[frame * 2] - want).abs() < 1e-6,
+                "frame {frame}: got {}, want {want}",
+                out[frame * 2]
+            );
+        }
+    }
+
+    #[test]
+    fn looped_track_mixes_additively_and_respects_mute_gain() {
+        let data = AudioData::from_raw_f32(vec![0.5; 4 * 2], 2);
+
+        let mut out = vec![0.25; 4 * 2];
+        mix_looped_track(&data, 0.0, 0, 4, 0, &mut out);
+        assert!((out[0] - 0.75).abs() < 1e-6);
+
+        // <= -30dB means muted, buffer untouched.
+        let mut out = vec![0.25; 4 * 2];
+        mix_looped_track(&data, -30.0, 0, 4, 0, &mut out);
+        assert!((out[0] - 0.25).abs() < 1e-6);
     }
 }

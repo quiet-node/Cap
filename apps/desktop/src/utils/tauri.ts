@@ -182,6 +182,9 @@ async setPlayheadPosition(frameNumber: number) : Promise<null> {
 async setProjectConfig(config: ProjectConfiguration) : Promise<null> {
     return await TAURI_INVOKE("set_project_config", { config });
 },
+async setBackgroundMusic(path: string | null) : Promise<string | null> {
+    return await TAURI_INVOKE("set_background_music", { path });
+},
 async updateProjectConfigInMemory(config: ProjectConfiguration, frameNumber: number | null, fps: number | null, resolutionBase: XY<number> | null) : Promise<null> {
     return await TAURI_INVOKE("update_project_config_in_memory", { config, frameNumber, fps, resolutionBase });
 },
@@ -470,7 +473,7 @@ export type AnnotationType = "arrow" | "circle" | "rectangle" | "text" | "mask"
 export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
-export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb: number; micStereoMode: StereoMode; systemVolumeDb: number }
+export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb: number; micStereoMode: StereoMode; systemVolumeDb: number; musicPath: string | null; musicVolumeDb: number }
 export type AudioInputLevelChange = number
 export type AudioMeta = { path: string; start_time?: number | null; device_id?: string | null }
 export type AuthSecret = { api_key: string } | { token: string; expires: number }

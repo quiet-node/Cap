@@ -1,7 +1,26 @@
+use cap_audio::AudioData;
+use cap_project::ProjectConfiguration;
+use std::{path::Path, sync::Arc};
+
 use crate::{
     SegmentMedia,
     audio::{AudioSegment, AudioSegmentTrack},
 };
+
+pub fn load_music_track(
+    project_path: &Path,
+    config: &ProjectConfiguration,
+) -> Option<Arc<AudioData>> {
+    let file_name = config.audio.music_path.as_ref()?;
+    let path = project_path.join(file_name);
+    match AudioData::from_file(&path) {
+        Ok(data) => Some(Arc::new(data)),
+        Err(e) => {
+            tracing::warn!(?e, ?path, "Failed to load background music, skipping");
+            None
+        }
+    }
+}
 
 pub fn get_audio_segments(segments: &[SegmentMedia]) -> Vec<AudioSegment> {
     segments

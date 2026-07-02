@@ -510,6 +510,7 @@ async fn main() {
         start_frame_number: 0,
         project: project_rx,
         segment_medias,
+        music: None,
         telemetry: Some(telemetry),
     };
 

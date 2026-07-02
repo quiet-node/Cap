@@ -14,6 +14,7 @@ import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { appDataDir, resolveResource } from "@tauri-apps/api/path";
+import * as dialog from "@tauri-apps/plugin-dialog";
 import {
 	BaseDirectory,
 	exists,
@@ -75,6 +76,7 @@ import IconLucideGrid from "~icons/lucide/grid";
 import IconLucideKeyboard from "~icons/lucide/keyboard";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideMoon from "~icons/lucide/moon";
+import IconLucideMusic from "~icons/lucide/music";
 import IconLucidePalette from "~icons/lucide/palette";
 import IconLucideRabbit from "~icons/lucide/rabbit";
 import IconLucideSparkles from "~icons/lucide/sparkles";
@@ -662,6 +664,83 @@ export function ConfigSidebar() {
 							/>
 						</Field>
 					)}
+					<Field
+						name="Background Music"
+						icon={<IconLucideMusic class="size-4" />}
+					>
+						<Show
+							when={project.audio.musicPath}
+							fallback={
+								<EditorButton
+									onClick={async () => {
+										const result = await dialog.open({
+											filters: [
+												{
+													name: "Audio Files",
+													extensions: [
+														"mp3",
+														"wav",
+														"m4a",
+														"aac",
+														"flac",
+														"ogg",
+													],
+												},
+											],
+											multiple: false,
+										});
+										if (typeof result !== "string") return;
+										try {
+											const fileName =
+												await commands.setBackgroundMusic(result);
+											setProject("audio", "musicPath", fileName);
+										} catch (error) {
+											toast.error(`${error}`);
+										}
+									}}
+								>
+									Choose audio file
+								</EditorButton>
+							}
+						>
+							{(musicPath) => (
+								<>
+									<Subfield name={musicPath()}>
+										<EditorButton
+											variant="danger"
+											onClick={async () => {
+												await commands
+													.setBackgroundMusic(null)
+													.catch(() => undefined);
+												setProject("audio", "musicPath", null);
+											}}
+										>
+											Remove
+										</EditorButton>
+									</Subfield>
+									<Subfield name="Music Volume">
+										<div class="w-full max-w-48">
+											<Slider
+												disabled={project.audio.mute}
+												value={[project.audio.musicVolumeDb ?? 0]}
+												onChange={(v) =>
+													setProject("audio", "musicVolumeDb", v[0])
+												}
+												minValue={-30}
+												maxValue={10}
+												step={0.1}
+												formatTooltip={(v) =>
+													v <= -30
+														? "Muted"
+														: `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
+												}
+											/>
+										</div>
+									</Subfield>
+								</>
+							)}
+						</Show>
+					</Field>
 				</KTabs.Content>
 				<KTabs.Content
 					value="cursor"

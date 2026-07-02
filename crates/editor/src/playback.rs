@@ -104,6 +104,7 @@ pub struct Playback {
     pub start_frame_number: u32,
     pub project: watch::Receiver<ProjectConfiguration>,
     pub segment_medias: Arc<Vec<SegmentMedia>>,
+    pub music: Option<Arc<cap_audio::AudioData>>,
     pub telemetry: Option<PlaybackTelemetry>,
 }
 
@@ -466,6 +467,7 @@ impl Playback {
 
             let audio_playback = AudioPlayback {
                 segments: get_audio_segments(&self.segment_medias),
+                music: self.music.clone(),
                 stop_rx: stop_rx.clone(),
                 start_frame_number: self.start_frame_number,
                 project: self.project.clone(),
@@ -1175,6 +1177,7 @@ impl PlaybackHandle {
 
 struct AudioPlayback {
     segments: Vec<AudioSegment>,
+    music: Option<Arc<cap_audio::AudioData>>,
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
     project: watch::Receiver<ProjectConfiguration>,
@@ -1187,7 +1190,8 @@ impl AudioPlayback {
     fn spawn(self) -> bool {
         let handle = tokio::runtime::Handle::current();
 
-        if self.segments.is_empty() || self.segments[0].tracks.is_empty() {
+        if self.music.is_none() && (self.segments.is_empty() || self.segments[0].tracks.is_empty())
+        {
             info!("No audio segments found, skipping audio playback thread.");
             return false;
         }
@@ -1283,6 +1287,7 @@ impl AudioPlayback {
             start_frame_number,
             project,
             segments,
+            music,
             fps,
             playhead_rx,
             ..
@@ -1386,7 +1391,8 @@ impl AudioPlayback {
                 .saturating_mul(headroom_multiplier)
                 .max(channels * AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT as usize);
 
-            let mut audio_renderer = AudioPlaybackBuffer::new(segments.clone(), base_output_info);
+            let mut audio_renderer =
+                AudioPlaybackBuffer::new(segments.clone(), music.clone(), base_output_info);
 
             match strategy {
                 BufferSizeStrategy::Fixed(desired) => {
@@ -1575,7 +1581,7 @@ impl AudioPlayback {
         duration_secs: f64,
     ) -> Result<(watch::Receiver<bool>, cpal::Stream), MediaError>
     where
-        T: FromSampleBytes + cpal::Sample,
+        T: FromSampleBytes + cpal::Sample + cpal::FromSample<f32>,
     {
         use crate::audio::PrerenderedAudioBuffer;
 
@@ -1584,6 +1590,7 @@ impl AudioPlayback {
             start_frame_number,
             project,
             segments,
+            music,
             fps,
             playhead_rx,
             ..
@@ -1613,6 +1620,7 @@ impl AudioPlayback {
         let project_snapshot = project.borrow().clone();
         let mut audio_buffer = PrerenderedAudioBuffer::<T>::new(
             segments,
+            music,
             &project_snapshot,
             output_info,
             duration_secs,
@@ -1647,6 +1655,7 @@ impl AudioPlayback {
 
         let mut playhead_rx_for_stream = playhead_rx.clone();
         let mut last_video_playhead = playhead;
+        let project_for_stream = project;
 
         let stream = device
             .build_output_stream(
@@ -1673,7 +1682,15 @@ impl AudioPlayback {
                         last_video_playhead = video_playhead;
                     }
 
-                    audio_buffer.fill(buffer);
+                    let music_gain_db = {
+                        let project = project_for_stream.borrow();
+                        if project.audio.mute {
+                            f32::NEG_INFINITY
+                        } else {
+                            project.audio.music_volume_db
+                        }
+                    };
+                    audio_buffer.fill(buffer, music_gain_db);
                 },
                 |err| eprintln!("Audio stream error: {err}"),
                 None,
