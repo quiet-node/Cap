@@ -498,6 +498,12 @@ impl Playback {
             let mut prefetch_buffer: VecDeque<PrefetchedFrame> =
                 VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
             let mut frame_cache = FrameCache::new(FRAME_CACHE_SIZE);
+            // Recordings are VFR: frame numbers that fall inside a static-screen
+            // stretch have no sample on disk, so the prefetcher never produces
+            // them. Hold the previously rendered frame for those so the render
+            // cadence (and with it zoom/cursor animation and audio sync) is not
+            // interrupted.
+            let mut last_rendered: Option<(Arc<DecodedSegmentFrames>, u32)> = None;
 
             let mut total_frames_rendered = 0u64;
             let mut total_frames_skipped = 0u64;
@@ -680,6 +686,7 @@ impl Playback {
                     let uniforms_duration = uniforms_start.elapsed();
                     let submit_start = Instant::now();
                     let submitted_frame_number = frame_number;
+                    let warmup_frames = Arc::clone(&segment_frames);
                     let rendered = self.renderer.render_frame_wait(
                         Arc::unwrap_or_clone(segment_frames),
                         uniforms,
@@ -688,6 +695,7 @@ impl Playback {
                     let submit_duration = submit_start.elapsed();
 
                     if rendered {
+                        last_rendered = Some((warmup_frames, segment_index));
                         if let Some(telemetry) = &self.telemetry {
                             telemetry.emit(PlaybackTelemetryEvent::FrameSubmitted {
                                 frame_number: submitted_frame_number,
@@ -966,6 +974,13 @@ impl Playback {
                                 Arc::new(prefetched.segment_frames),
                                 prefetched.segment_index,
                             ))
+                        } else if let Some(held) = last_rendered.clone() {
+                            // The buffer holds only frames ahead of this one, so
+                            // this frame number has no sample (VFR gap). Re-render
+                            // the held frame with this frame's uniforms so zoom and
+                            // cursor animation keep advancing.
+                            frame_source = PlaybackFrameSource::Cache;
+                            Some(held)
                         } else {
                             let min_buffered = prefetch_buffer.iter().map(|p| p.frame_number).min();
                             if let Some(next_available_frame) = min_buffered
@@ -1071,6 +1086,7 @@ impl Playback {
                         precomputed_cursor,
                     );
                     let uniforms_duration = uniforms_start.elapsed();
+                    last_rendered = Some((Arc::clone(&segment_frames), segment_index));
                     let submit_start = Instant::now();
                     let submitted_frame_number = frame_number;
                     self.renderer.render_frame(
