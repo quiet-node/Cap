@@ -251,6 +251,31 @@ impl CachedFrame {
     }
 }
 
+// On a cache miss, prefer the most recent PAST frame — on a mostly-static
+// screen an older frame is the same content, so it is always temporally safe.
+// Only fall forward to a FUTURE frame within a tiny tolerance: a distant future
+// frame shows content that has not happened yet at the requested time, which
+// makes exported video race ahead of the cursor (menus/reactions appear early)
+// and flicker as adjacent requests land on different cached neighbours.
+fn pick_fallback_frame(
+    cache: &BTreeMap<u32, CachedFrame>,
+    req_frame: u32,
+    past_budget: u32,
+) -> Option<&CachedFrame> {
+    const MAX_FUTURE_FALLBACK: u32 = 2;
+    if let Some((&frame_num, cached)) = cache.range(..=req_frame).next_back()
+        && req_frame - frame_num <= past_budget
+    {
+        return Some(cached);
+    }
+    if let Some((&frame_num, cached)) = cache.range(req_frame..).next()
+        && frame_num - req_frame <= MAX_FUTURE_FALLBACK
+    {
+        return Some(cached);
+    }
+    None
+}
+
 struct DecoderHealth {
     consecutive_empty_iterations: u32,
     consecutive_errors: u32,
@@ -748,19 +773,12 @@ impl AVAssetReaderDecoder {
                                     let data = cached.data().clone();
                                     *last_sent_frame.borrow_mut() = Some(data.clone());
                                     let _ = req.sender.send(data.to_decoded_frame());
-                                } else {
-                                    let nearest = cache
-                                        .range(..=req.frame)
-                                        .next_back()
-                                        .or_else(|| cache.range(req.frame..).next());
-
-                                    if let Some((&frame_num, cached)) = nearest {
-                                        let distance = req.frame.abs_diff(frame_num);
-                                        if distance <= req.max_fallback_distance {
-                                            let _ =
-                                                req.sender.send(cached.data().to_decoded_frame());
-                                        }
-                                    }
+                                } else if let Some(cached) = pick_fallback_frame(
+                                    &cache,
+                                    req.frame,
+                                    req.max_fallback_distance,
+                                ) {
+                                    let _ = req.sender.send(cached.data().to_decoded_frame());
                                 }
                             } else {
                                 remaining_requests.push(req);
@@ -875,26 +893,9 @@ impl AVAssetReaderDecoder {
                         req.max_fallback_distance
                     };
 
-                    let nearest = cache
-                        .range(..=req.frame)
-                        .next_back()
-                        .or_else(|| cache.range(req.frame..).next());
-
-                    if let Some((&frame_num, cached)) = nearest {
-                        let distance = req.frame.abs_diff(frame_num);
-                        if distance <= fallback_distance {
-                            let _ = req.sender.send(cached.data().to_decoded_frame());
-                        } else if allow_relaxed_fallback
-                            && let Some(ref last) = *last_sent_frame.borrow()
-                        {
-                            let _ = req.sender.send(last.to_decoded_frame());
-                        } else if allow_relaxed_fallback
-                            && let Some(ref first) = *first_ever_frame.borrow()
-                        {
-                            let _ = req.sender.send(first.to_decoded_frame());
-                        } else {
-                            unfulfilled_count += 1;
-                        }
+                    if let Some(cached) = pick_fallback_frame(&cache, req.frame, fallback_distance)
+                    {
+                        let _ = req.sender.send(cached.data().to_decoded_frame());
                     } else if allow_relaxed_fallback
                         && let Some(ref last) = *last_sent_frame.borrow()
                     {
