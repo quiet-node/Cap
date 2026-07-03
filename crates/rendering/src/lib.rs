@@ -820,16 +820,19 @@ pub async fn render_video_to_channel(
                 });
             }
 
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-                tracing::error!(
+            // Long decode-miss runs are normal on VFR recordings: a static
+            // screen produces no samples, sometimes for many seconds, and the
+            // held previous frame below is the correct output for that span.
+            // Aborting here used to kill hardware export on any >3s static
+            // stretch and silently fall back to the software pipeline. Genuine
+            // "nothing ever decoded" failures still abort via the initial-frame
+            // guard above.
+            if consecutive_failures == MAX_CONSECUTIVE_FAILURES {
+                tracing::warn!(
                     frame_number = current_frame_number,
                     consecutive_failures = consecutive_failures,
-                    "Too many consecutive frame failures - aborting export"
+                    "Sustained decode-miss run; continuing with held frames (VFR gap or stalled decoder)"
                 );
-                return Err(RenderingError::FrameDecodeFailed {
-                    frame_number: current_frame_number,
-                    consecutive_failures,
-                });
             }
 
             if let Some(ref last_frame) = last_successful_frame {
@@ -1293,16 +1296,19 @@ pub async fn render_video_to_channel_nv12(
                 });
             }
 
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-                tracing::error!(
+            // Long decode-miss runs are normal on VFR recordings: a static
+            // screen produces no samples, sometimes for many seconds, and the
+            // held previous frame below is the correct output for that span.
+            // Aborting here used to kill hardware export on any >3s static
+            // stretch and silently fall back to the software pipeline. Genuine
+            // "nothing ever decoded" failures still abort via the initial-frame
+            // guard above.
+            if consecutive_failures == MAX_CONSECUTIVE_FAILURES {
+                tracing::warn!(
                     frame_number = current_frame_number,
                     consecutive_failures = consecutive_failures,
-                    "Too many consecutive frame failures - aborting export"
+                    "Sustained decode-miss run; continuing with held frames (VFR gap or stalled decoder)"
                 );
-                return Err(RenderingError::FrameDecodeFailed {
-                    frame_number: current_frame_number,
-                    consecutive_failures,
-                });
             }
 
             if let Some(ref last_frame) = last_successful_frame {

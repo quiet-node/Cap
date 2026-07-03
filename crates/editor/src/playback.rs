@@ -93,7 +93,16 @@ fn precision_sleep_sync(deadline: Instant) {
 
     #[cfg(not(target_os = "windows"))]
     {
-        std::thread::sleep(remaining);
+        // Plain sleep overshoots by 1-4ms on macOS, which starts every frame
+        // late and trips the overshoot-skip path under load. Sleep short of
+        // the deadline, then spin the remainder like the Windows branch.
+        let spin_threshold = Duration::from_millis(2);
+        if remaining > spin_threshold {
+            std::thread::sleep(remaining.saturating_sub(spin_threshold));
+        }
+        while Instant::now() < deadline {
+            std::hint::spin_loop();
+        }
     }
 }
 
