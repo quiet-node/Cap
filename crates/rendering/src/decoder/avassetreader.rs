@@ -261,7 +261,6 @@ struct DecoderHealth {
 }
 
 impl DecoderHealth {
-    const MAX_CONSECUTIVE_EMPTY: u32 = 5;
     const MAX_CONSECUTIVE_ERRORS: u32 = 10;
     const STALE_THRESHOLD_SECS: u64 = 10;
     const EOF_TOLERANCE_EMPTY: u32 = 15;
@@ -319,8 +318,13 @@ impl DecoderHealth {
                 || self.consecutive_errors >= Self::MAX_CONSECUTIVE_ERRORS;
         }
 
-        self.consecutive_empty_iterations >= Self::MAX_CONSECUTIVE_EMPTY
-            || self.consecutive_errors >= Self::MAX_CONSECUTIVE_ERRORS
+        // Empty reads alone are not a health signal: recordings are VFR (the
+        // OS delivers no frames while the screen is static), so a run of
+        // requested frames with no new sample is normal and the caller holds
+        // the last decoded frame. Recreating the decoder here caused visible
+        // stutter every time playback crossed a static stretch. Genuine
+        // decoder wedges are still caught by the stale-decode backstop below.
+        self.consecutive_errors >= Self::MAX_CONSECUTIVE_ERRORS
             || (self.total_frames_decoded > 0
                 && self.last_successful_decode.elapsed().as_secs() > Self::STALE_THRESHOLD_SECS)
     }
@@ -968,13 +972,15 @@ mod tests {
         assert!(!health.needs_recreation(10, 100));
     }
 
+    // VFR recordings legitimately produce long runs of empty reads while the
+    // screen is static; they must not trigger decoder recreation on their own.
     #[test]
-    fn test_decoder_health_needs_recreation_after_empty_iterations() {
+    fn test_decoder_health_empty_iterations_alone_do_not_recreate() {
         let mut health = DecoderHealth::new();
-        for _ in 0..DecoderHealth::MAX_CONSECUTIVE_EMPTY {
+        for _ in 0..100 {
             health.record_empty_iteration();
         }
-        assert!(health.needs_recreation(50, 200));
+        assert!(!health.needs_recreation(50, 200));
     }
 
     #[test]
@@ -1000,11 +1006,14 @@ mod tests {
     }
 
     #[test]
-    fn test_decoder_health_below_threshold_no_recreation() {
+    fn test_decoder_health_stale_decode_triggers_recreation() {
         let mut health = DecoderHealth::new();
-        for _ in 0..(DecoderHealth::MAX_CONSECUTIVE_EMPTY - 1) {
-            health.record_empty_iteration();
-        }
-        assert!(!health.needs_recreation(50, 100));
+        health.record_success(1, 0);
+        health.last_successful_decode = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(
+                DecoderHealth::STALE_THRESHOLD_SECS + 1,
+            ))
+            .unwrap();
+        assert!(health.needs_recreation(50, 1000));
     }
 }
