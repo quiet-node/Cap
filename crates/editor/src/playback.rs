@@ -1212,7 +1212,8 @@ impl AudioPlayback {
     fn spawn(self) -> bool {
         let handle = tokio::runtime::Handle::current();
 
-        if self.segments.is_empty() || self.segments[0].tracks.is_empty() {
+        if self.music.is_empty() && (self.segments.is_empty() || self.segments[0].tracks.is_empty())
+        {
             info!("No audio segments found, skipping audio playback thread.");
             return false;
         }
