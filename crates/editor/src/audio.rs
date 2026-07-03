@@ -280,6 +280,22 @@ impl AudioRenderer {
         if project.audio.mute {
             return;
         }
+        // Fade-out needs the output length; without a timeline (no known end)
+        // only the fade-in applies.
+        let envelope = match &project.timeline {
+            Some(timeline) => cap_audio::MusicEnvelope::new(
+                project.audio.music_fade_in,
+                project.audio.music_fade_out,
+                (timeline.duration() * AudioData::SAMPLE_RATE as f64).round() as usize,
+                AudioData::SAMPLE_RATE,
+            ),
+            None => cap_audio::MusicEnvelope::new(
+                project.audio.music_fade_in,
+                0.0,
+                usize::MAX,
+                AudioData::SAMPLE_RATE,
+            ),
+        };
         cap_audio::mix_looped_track(
             music,
             project.audio.music_volume_db,
@@ -287,6 +303,7 @@ impl AudioRenderer {
             frames,
             0,
             out,
+            envelope,
         );
     }
 
@@ -678,7 +695,7 @@ impl<T: FromSampleBytes> PrerenderedAudioBuffer<T> {
         (self.read_position / self.channels) as f64 / self.sample_rate as f64
     }
 
-    pub fn fill(&mut self, buffer: &mut [T], music_gain_db: f32)
+    pub fn fill(&mut self, buffer: &mut [T], music_gain_db: f32, music_fades: (f32, f32))
     where
         T: cpal::Sample + cpal::FromSample<f32>,
     {
@@ -688,11 +705,18 @@ impl<T: FromSampleBytes> PrerenderedAudioBuffer<T> {
         let gain = cap_audio::gain_for_db(music_gain_db);
         let music = (!self.music_samples.is_empty() && gain != f32::NEG_INFINITY)
             .then_some(&self.music_samples);
+        let envelope = cap_audio::MusicEnvelope::new(
+            music_fades.0,
+            music_fades.1,
+            self.samples.len() / self.channels,
+            self.sample_rate,
+        );
 
         for (i, out) in buffer.iter_mut().enumerate().take(to_copy) {
             let mut value = self.samples[self.read_position + i];
             if let Some(music) = music {
                 let music_sample = music[(self.read_position + i) % music.len()];
+                let gain = gain * envelope.factor((self.read_position + i) / self.channels);
                 value = (value + music_sample * gain).clamp(-1.0, 1.0);
             }
             *out = T::from_sample(value);
@@ -948,18 +972,45 @@ mod tests {
         };
 
         let mut out = vec![0.0f32; 4];
-        buffer.fill(&mut out, 0.0);
+        buffer.fill(&mut out, 0.0, (0.0, 0.0));
         assert!((out[0] - 0.6).abs() < 1e-6);
         assert!((out[3] - 0.6).abs() < 1e-6);
 
         let mut out = vec![0.0f32; 4];
-        buffer.fill(&mut out, -30.0);
+        buffer.fill(&mut out, -30.0, (0.0, 0.0));
         assert!((out[0] - 0.1).abs() < 1e-6);
 
         // Past the main mix the buffer pads silence; music must not extend it.
         let mut out = vec![0.7f32; 4];
-        buffer.fill(&mut out, 0.0);
+        buffer.fill(&mut out, 0.0, (0.0, 0.0));
         assert_eq!(out, vec![0.0; 4]);
+    }
+
+    // Fades shape only the music stem: main mix stays untouched while the
+    // music contribution ramps with the envelope.
+    #[test]
+    fn prerendered_fill_applies_music_fades() {
+        let sample_rate = AudioData::SAMPLE_RATE;
+        let total_frames = sample_rate as usize; // 1s timeline
+        let mut buffer = PrerenderedAudioBuffer::<f32> {
+            samples: vec![0.1; total_frames * 2],
+            music_samples: vec![0.5, 0.5],
+            read_position: 0,
+            sample_rate,
+            channels: 2,
+            _format: std::marker::PhantomData,
+        };
+
+        // 1s fade-in over a 1s timeline: frame 0 -> no music, frame at 0.5s ->
+        // half the music gain, main mix constant throughout.
+        let mut out = vec![0.0f32; 2];
+        buffer.fill(&mut out, 0.0, (1.0, 0.0));
+        assert!((out[0] - 0.1).abs() < 1e-6);
+
+        buffer.set_playhead(0.5);
+        let mut out = vec![0.0f32; 2];
+        buffer.fill(&mut out, 0.0, (1.0, 0.0));
+        assert!((out[0] - (0.1 + 0.25)).abs() < 1e-3);
     }
 
     #[test]

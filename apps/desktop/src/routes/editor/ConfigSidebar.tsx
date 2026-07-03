@@ -737,6 +737,40 @@ export function ConfigSidebar() {
 											/>
 										</div>
 									</Subfield>
+									<Subfield name="Fade In">
+										<div class="w-full max-w-48">
+											<Slider
+												disabled={project.audio.mute}
+												value={[project.audio.musicFadeIn ?? 0]}
+												onChange={(v) =>
+													setProject("audio", "musicFadeIn", v[0])
+												}
+												minValue={0}
+												maxValue={10}
+												step={0.1}
+												formatTooltip={(v) =>
+													v <= 0 ? "Off" : `${v.toFixed(1)}s`
+												}
+											/>
+										</div>
+									</Subfield>
+									<Subfield name="Fade Out">
+										<div class="w-full max-w-48">
+											<Slider
+												disabled={project.audio.mute}
+												value={[project.audio.musicFadeOut ?? 0]}
+												onChange={(v) =>
+													setProject("audio", "musicFadeOut", v[0])
+												}
+												minValue={0}
+												maxValue={10}
+												step={0.1}
+												formatTooltip={(v) =>
+													v <= 0 ? "Off" : `${v.toFixed(1)}s`
+												}
+											/>
+										</div>
+									</Subfield>
 								</>
 							)}
 						</Show>

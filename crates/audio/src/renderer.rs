@@ -100,6 +100,7 @@ pub fn mix_looped_track(
     frames: usize,
     out_offset: usize,
     out: &mut [f32],
+    envelope: MusicEnvelope,
 ) {
     let channels = data.channels() as usize;
     let total_frames = data.samples().len() / channels;
@@ -124,9 +125,54 @@ pub fn mix_looped_track(
             )
         };
 
+        let gain = gain * envelope.factor(start_frame + i);
         let out_idx = out_offset + i * 2;
         out[out_idx] = (out[out_idx] + l * gain).clamp(-1.0, 1.0);
         out[out_idx + 1] = (out[out_idx + 1] + r * gain).clamp(-1.0, 1.0);
+    }
+}
+
+/// Linear fade-in from output frame 0 and fade-out ending at the last output
+/// frame, expressed in output-timeline frames. `Default` means no fades.
+#[derive(Clone, Copy, Default)]
+pub struct MusicEnvelope {
+    fade_in_frames: usize,
+    fade_out_start_frame: usize,
+    fade_out_frames: usize,
+}
+
+impl MusicEnvelope {
+    pub fn new(
+        fade_in_secs: f32,
+        fade_out_secs: f32,
+        total_frames: usize,
+        sample_rate: u32,
+    ) -> Self {
+        let to_frames = |secs: f32| {
+            if secs > 0.0 {
+                (secs as f64 * sample_rate as f64).round() as usize
+            } else {
+                0
+            }
+        };
+        let fade_out_frames = to_frames(fade_out_secs).min(total_frames);
+        Self {
+            fade_in_frames: to_frames(fade_in_secs),
+            fade_out_start_frame: total_frames.saturating_sub(fade_out_frames),
+            fade_out_frames,
+        }
+    }
+
+    pub fn factor(&self, frame: usize) -> f32 {
+        let mut factor = 1.0f32;
+        if self.fade_in_frames > 0 && frame < self.fade_in_frames {
+            factor *= frame as f32 / self.fade_in_frames as f32;
+        }
+        if self.fade_out_frames > 0 && frame >= self.fade_out_start_frame {
+            let into = frame - self.fade_out_start_frame;
+            factor *= (1.0 - into as f32 / self.fade_out_frames as f32).max(0.0);
+        }
+        factor
     }
 }
 
@@ -215,7 +261,7 @@ mod tests {
         let data = AudioData::from_raw_f32(samples, 2);
 
         let mut out = vec![0.0; 10 * 2];
-        mix_looped_track(&data, 0.0, 2, 10, 0, &mut out);
+        mix_looped_track(&data, 0.0, 2, 10, 0, &mut out, MusicEnvelope::default());
 
         // start_frame 2 -> source frames 2,3,0,1,2,3,0,1,2,3.
         let expected = [0.3, 0.4, 0.1, 0.2, 0.3, 0.4, 0.1, 0.2, 0.3, 0.4];
@@ -233,12 +279,46 @@ mod tests {
         let data = AudioData::from_raw_f32(vec![0.5; 4 * 2], 2);
 
         let mut out = vec![0.25; 4 * 2];
-        mix_looped_track(&data, 0.0, 0, 4, 0, &mut out);
+        mix_looped_track(&data, 0.0, 0, 4, 0, &mut out, MusicEnvelope::default());
         assert!((out[0] - 0.75).abs() < 1e-6);
 
         // <= -30dB means muted, buffer untouched.
         let mut out = vec![0.25; 4 * 2];
-        mix_looped_track(&data, -30.0, 0, 4, 0, &mut out);
+        mix_looped_track(&data, -30.0, 0, 4, 0, &mut out, MusicEnvelope::default());
         assert!((out[0] - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn music_envelope_fades_in_and_out_linearly() {
+        // 10-frame timeline at synthetic 1Hz-per-frame rate: 4-frame fade-in,
+        // 2-frame fade-out anchored at the end.
+        let env = MusicEnvelope::new(4.0, 2.0, 10, 1);
+
+        assert!((env.factor(0) - 0.0).abs() < 1e-6);
+        assert!((env.factor(2) - 0.5).abs() < 1e-6);
+        assert!((env.factor(4) - 1.0).abs() < 1e-6);
+        assert!((env.factor(7) - 1.0).abs() < 1e-6);
+        assert!((env.factor(8) - 1.0).abs() < 1e-6);
+        assert!((env.factor(9) - 0.5).abs() < 1e-6);
+
+        // Default envelope is flat.
+        let flat = MusicEnvelope::default();
+        assert!((flat.factor(0) - 1.0).abs() < 1e-6);
+        assert!((flat.factor(usize::MAX / 2) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mix_looped_track_applies_envelope_gain() {
+        let data = AudioData::from_raw_f32(vec![0.5; 8 * 2], 2);
+        // Fade-in over 4 frames of an 8-frame timeline, no fade-out.
+        let env = MusicEnvelope::new(4.0, 0.0, 8, 1);
+
+        let mut out = vec![0.0; 8 * 2];
+        mix_looped_track(&data, 0.0, 0, 8, 0, &mut out, env);
+
+        assert!((out[0] - 0.0).abs() < 1e-6);
+        assert!((out[2 * 2] - 0.25).abs() < 1e-6);
+        assert!((out[4 * 2] - 0.5).abs() < 1e-6);
+        assert!((out[7 * 2] - 0.5).abs() < 1e-6);
     }
 }

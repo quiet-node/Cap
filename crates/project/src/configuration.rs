@@ -420,6 +420,8 @@ pub struct AudioConfiguration {
     pub system_volume_db: f32,
     pub music_path: Option<String>,
     pub music_volume_db: f32,
+    pub music_fade_in: f32,
+    pub music_fade_out: f32,
 }
 
 impl Default for AudioConfiguration {
@@ -432,6 +434,8 @@ impl Default for AudioConfiguration {
             system_volume_db: 0.0,
             music_path: None,
             music_volume_db: 0.0,
+            music_fade_in: 0.0,
+            music_fade_out: 0.0,
         }
     }
 }

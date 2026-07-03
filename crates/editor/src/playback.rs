@@ -1682,15 +1682,19 @@ impl AudioPlayback {
                         last_video_playhead = video_playhead;
                     }
 
-                    let music_gain_db = {
+                    let (music_gain_db, music_fades) = {
                         let project = project_for_stream.borrow();
-                        if project.audio.mute {
+                        let gain = if project.audio.mute {
                             f32::NEG_INFINITY
                         } else {
                             project.audio.music_volume_db
-                        }
+                        };
+                        (
+                            gain,
+                            (project.audio.music_fade_in, project.audio.music_fade_out),
+                        )
                     };
-                    audio_buffer.fill(buffer, music_gain_db);
+                    audio_buffer.fill(buffer, music_gain_db, music_fades);
                 },
                 |err| eprintln!("Audio stream error: {err}"),
                 None,
